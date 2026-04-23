@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tech-watch</title>
+    <link rel="stylesheet" href="/public/style.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Daily Watchboard</p>
+          <h1>tech-watch</h1>
+          <p class="hero-copy">
+            A live public-RSS watch across tech, AI, and geopolitics. Feeds refresh every
+            <strong><%= refreshIntervalHours %> hours</strong>.
+          </p>
+        </div>
+        <div class="hero-meta">
+          <div class="stat-card">
+            <span class="stat-label">Last updated</span>
+            <strong><%= lastUpdated %> UTC</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Items cached</span>
+            <strong><%= totalItems %></strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Last refresh attempt</span>
+            <strong><%= lastAttemptedAt %> UTC</strong>
+          </div>
+        </div>
+      </header>
+
+      <% if (!hasData) { %>
+        <section class="empty-state">
+          <h2>Feed cache is warming up</h2>
+          <p>The server is fetching sources now. Reload in a moment.</p>
+        </section>
+      <% } %>
+
+      <main class="content-grid">
+        <% Object.entries(categories).forEach(([category, items]) => { %>
+          <section class="category-panel">
+            <div class="category-header">
+              <div>
+                <p class="category-kicker">Category</p>
+                <h2><%= category %></h2>
+              </div>
+              <span class="pill"><%= items.length %> items</span>
+            </div>
+
+            <% if (items.length === 0) { %>
+              <p class="empty-copy">No articles available for this category right now.</p>
+            <% } else { %>
+              <div class="article-list">
+                <% items.forEach((item) => { %>
+                  <article class="article-card">
+                    <div class="article-meta">
+                      <span><%= item.source %></span>
+                      <span><%= relativeTime(item.publishedAt) %></span>
+                    </div>
+                    <h3>
+                      <a href="<%= item.link %>" target="_blank" rel="noreferrer">
+                        <%= item.title %>
+                      </a>
+                    </h3>
+                    <% if (item.summary) { %>
+                      <p><%= item.summary %></p>
+                    <% } %>
+                    <div class="article-footer">
+                      <time datetime="<%= item.publishedAtIso %>"><%= formatArticleDate(item.publishedAt) %> UTC</time>
+                      <a href="<%= item.link %>" target="_blank" rel="noreferrer">Open article</a>
+                    </div>
+                  </article>
+                <% }) %>
+              </div>
+            <% } %>
+          </section>
+        <% }) %>
+      </main>
+
+      <section class="status-panel">
+        <div class="status-header">
+          <h2>Feed status</h2>
+          <p>Partial failures do not stop the page from rendering.</p>
+        </div>
+        <div class="status-table">
+          <% feedStatuses.forEach((feed) => { %>
+            <div class="status-row <%= feed.ok ? 'status-ok' : 'status-error' %>">
+              <div>
+                <strong><%= feed.source %></strong>
+                <span><%= feed.category %></span>
+              </div>
+              <div>
+                <% if (feed.ok) { %>
+                  <strong><%= feed.itemCount %> items</strong>
+                <% } else { %>
+                  <strong>Failed</strong>
+                <% } %>
+                <span><%= feed.durationMs %> ms</span>
+              </div>
+              <div class="status-note">
+                <%= feed.ok ? 'Healthy' : feed.error %>
+              </div>
+            </div>
+          <% }) %>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

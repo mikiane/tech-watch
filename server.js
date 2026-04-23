@@ -1,0 +1,311 @@
+const path = require('path');
+const Fastify = require('fastify');
+const fastifyStatic = require('@fastify/static');
+const fastifyView = require('@fastify/view');
+const ejs = require('ejs');
+const Parser = require('rss-parser');
+const fetch = require('node-fetch');
+
+const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
+const REFRESH_INTERVAL_MS = Number(process.env.REFRESH_INTERVAL_MS || 6 * 60 * 60 * 1000);
+const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 15000);
+const MAX_ITEMS_PER_FEED = Number(process.env.MAX_ITEMS_PER_FEED || 12);
+const MAX_ITEMS_PER_CATEGORY = Number(process.env.MAX_ITEMS_PER_CATEGORY || 24);
+
+const FEEDS = [
+  { category: 'Tech', source: 'TechCrunch', url: 'https://techcrunch.com/feed/' },
+  { category: 'Tech', source: 'The Verge', url: 'https://www.theverge.com/rss/index.xml' },
+  { category: 'Tech', source: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/index' },
+  { category: 'Tech', source: 'Hacker News', url: 'https://hnrss.org/frontpage' },
+  { category: 'AI', source: 'OpenAI News', url: 'https://openai.com/news/rss.xml' },
+  { category: 'AI', source: 'VentureBeat AI', url: 'https://venturebeat.com/category/ai/feed' },
+  { category: 'AI', source: 'Hugging Face Blog', url: 'https://huggingface.co/blog/feed.xml' },
+  { category: 'AI', source: 'MIT News AI', url: 'https://news.mit.edu/rss/topic/artificial-intelligence2' },
+  { category: 'Geopolitics', source: 'BBC World', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+  { category: 'Geopolitics', source: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
+  { category: 'Geopolitics', source: 'The Guardian World', url: 'https://www.theguardian.com/world/rss' },
+  { category: 'Geopolitics', source: 'Foreign Affairs', url: 'https://www.foreignaffairs.com/rss.xml' }
+];
+
+const parser = new Parser({
+  customFields: {
+    item: ['media:content', 'content:encoded', 'description']
+  }
+});
+
+const app = Fastify({
+  logger: {
+    transport: process.env.NODE_ENV === 'development'
+      ? { target: 'pino-pretty' }
+      : undefined
+  }
+});
+
+const cache = {
+  categories: buildEmptyCategories(),
+  lastUpdated: null,
+  lastAttemptedAt: null,
+  feedStatuses: [],
+  hasData: false,
+  totalItems: 0
+};
+
+let refreshInFlight = null;
+
+function buildEmptyCategories() {
+  return {
+    Tech: [],
+    AI: [],
+    Geopolitics: []
+  };
+}
+
+function toDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function stripHtml(value) {
+  if (!value) {
+    return '';
+  }
+
+  return String(value)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncate(value, length) {
+  if (!value || value.length <= length) {
+    return value;
+  }
+
+  return `${value.slice(0, length - 1).trim()}…`;
+}
+
+function normalizeItem(feed, item) {
+  const publishedAt =
+    toDate(item.isoDate) ||
+    toDate(item.pubDate) ||
+    toDate(item.date) ||
+    new Date(0);
+
+  const summary = stripHtml(
+    item.contentSnippet ||
+    item.content ||
+    item['content:encoded'] ||
+    item.description ||
+    ''
+  );
+
+  return {
+    category: feed.category,
+    source: feed.source,
+    title: item.title || 'Untitled',
+    link: item.link || '#',
+    publishedAt,
+    publishedAtIso: publishedAt.toISOString(),
+    summary: truncate(summary, 220)
+  };
+}
+
+async function fetchFeed(feed) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const startedAt = Date.now();
+
+  try {
+    const response = await fetch(feed.url, {
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'tech-watch/1.0 (+https://coolify.io)'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const xml = await response.text();
+    const parsed = await parser.parseString(xml);
+    const items = (parsed.items || [])
+      .map((item) => normalizeItem(feed, item))
+      .filter((item) => item.link && item.title)
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, MAX_ITEMS_PER_FEED);
+
+    return {
+      ok: true,
+      source: feed.source,
+      category: feed.category,
+      url: feed.url,
+      itemCount: items.length,
+      durationMs: Date.now() - startedAt,
+      items
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      source: feed.source,
+      category: feed.category,
+      url: feed.url,
+      itemCount: 0,
+      durationMs: Date.now() - startedAt,
+      error: error.name === 'AbortError' ? 'Request timed out' : error.message,
+      items: []
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function refreshCache() {
+  if (refreshInFlight) {
+    return refreshInFlight;
+  }
+
+  refreshInFlight = (async () => {
+    cache.lastAttemptedAt = new Date();
+
+    const results = await Promise.all(FEEDS.map((feed) => fetchFeed(feed)));
+    const nextCategories = buildEmptyCategories();
+    let totalItems = 0;
+
+    for (const result of results) {
+      if (result.ok) {
+        nextCategories[result.category].push(...result.items);
+        totalItems += result.items.length;
+      }
+    }
+
+    for (const category of Object.keys(nextCategories)) {
+      nextCategories[category] = nextCategories[category]
+        .sort((a, b) => b.publishedAt - a.publishedAt)
+        .slice(0, MAX_ITEMS_PER_CATEGORY);
+    }
+
+    const successfulFeeds = results.filter((result) => result.ok).length;
+    if (successfulFeeds > 0) {
+      cache.categories = nextCategories;
+      cache.totalItems = totalItems;
+      cache.lastUpdated = new Date();
+      cache.hasData = true;
+    }
+
+    cache.feedStatuses = results.map((result) => ({
+      source: result.source,
+      category: result.category,
+      ok: result.ok,
+      itemCount: result.itemCount,
+      error: result.error || null,
+      durationMs: result.durationMs
+    }));
+
+    app.log.info({
+      successfulFeeds,
+      totalFeeds: results.length,
+      totalItems: cache.totalItems
+    }, 'RSS refresh completed');
+
+    return cache;
+  })();
+
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
+function formatTimestamp(value) {
+  if (!value) {
+    return 'Never';
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'UTC'
+  }).format(value);
+}
+
+function relativeTime(value) {
+  const seconds = Math.round((value.getTime() - Date.now()) / 1000);
+  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+  const ranges = [
+    { unit: 'day', seconds: 86400 },
+    { unit: 'hour', seconds: 3600 },
+    { unit: 'minute', seconds: 60 }
+  ];
+
+  for (const range of ranges) {
+    if (Math.abs(seconds) >= range.seconds || range.unit === 'minute') {
+      return formatter.format(Math.round(seconds / range.seconds), range.unit);
+    }
+  }
+
+  return 'just now';
+}
+
+async function bootstrap() {
+  await app.register(fastifyStatic, {
+    root: path.join(__dirname, 'public'),
+    prefix: '/public/'
+  });
+
+  await app.register(fastifyView, {
+    engine: { ejs },
+    root: path.join(__dirname, 'views')
+  });
+
+  app.get('/', async (_request, reply) => {
+    return reply.view('index.ejs', {
+      categories: cache.categories,
+      lastUpdated: formatTimestamp(cache.lastUpdated),
+      lastAttemptedAt: formatTimestamp(cache.lastAttemptedAt),
+      totalItems: cache.totalItems,
+      refreshIntervalHours: REFRESH_INTERVAL_MS / (60 * 60 * 1000),
+      hasData: cache.hasData,
+      feedStatuses: cache.feedStatuses,
+      formatArticleDate: formatTimestamp,
+      relativeTime
+    });
+  });
+
+  app.get('/health', async () => ({
+    status: cache.hasData ? 'ok' : 'warming',
+    lastUpdated: cache.lastUpdated ? cache.lastUpdated.toISOString() : null,
+    lastAttemptedAt: cache.lastAttemptedAt ? cache.lastAttemptedAt.toISOString() : null,
+    totalItems: cache.totalItems,
+    feeds: cache.feedStatuses
+  }));
+
+  app.setErrorHandler((error, _request, reply) => {
+    app.log.error(error);
+    reply.status(500).send('Internal Server Error');
+  });
+
+  await refreshCache();
+
+  const interval = setInterval(() => {
+    refreshCache().catch((error) => app.log.error(error, 'Scheduled refresh failed'));
+  }, REFRESH_INTERVAL_MS);
+
+  interval.unref();
+
+  await app.listen({ port: PORT, host: HOST });
+  app.log.info(`tech-watch listening on http://${HOST}:${PORT}`);
+}
+
+bootstrap().catch((error) => {
+  app.log.error(error, 'Failed to start server');
+  process.exit(1);
+});
