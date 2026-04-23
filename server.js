@@ -273,49 +273,45 @@ async function scrapeArticleImage(url) {
     }
 
     const html = await response.text();
-    const ogImageMatch = html.match(
-      /<meta\b[^>]*property\s*=\s*(["'])og:image\1[^>]*content\s*=\s*(["'])(.*?)\2[^>]*>/i
-    ) || html.match(
-      /<meta\b[^>]*content\s*=\s*(["'])(.*?)\1[^>]*property\s*=\s*(["'])og:image\3[^>]*>/i
-    );
 
-    if (ogImageMatch) {
-      const ogImage = resolveImageUrl(ogImageMatch[2] || ogImageMatch[3], url);
-      if (ogImage) {
-        return ogImage;
+    // Find meta tag with og:image property, then extract content attribute
+    for (const metaRegex of [
+      /<meta\s[^>]*property\s*=\s*["']og:image["'][^>]*>/gi,
+      /<meta\s[^>]*name\s*=\s*["']twitter:image["'][^>]*>/gi,
+    ]) {
+      let match;
+      while ((match = metaRegex.exec(html)) !== null) {
+        const metaTag = match[0];
+        const contentMatch = metaTag.match(/\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+        if (contentMatch) {
+          const imageUrl = contentMatch[1] || contentMatch[2];
+          if (imageUrl && !imageUrl.startsWith('<') && !imageUrl.includes('"') && !imageUrl.includes("'")) {
+            return resolveImageUrl(imageUrl, url);
+          }
+        }
       }
     }
 
-    const twitterImageMatch = html.match(
-      /<meta\b[^>]*name\s*=\s*(["'])twitter:image\1[^>]*content\s*=\s*(["'])(.*?)\2[^>]*>/i
-    ) || html.match(
-      /<meta\b[^>]*content\s*=\s*(["'])(.*?)\1[^>]*name\s*=\s*(["'])twitter:image\3[^>]*>/i
-    );
-
-    if (twitterImageMatch) {
-      const twitterImage = resolveImageUrl(twitterImageMatch[2] || twitterImageMatch[3], url);
-      if (twitterImage) {
-        return twitterImage;
-      }
-    }
-
+    // Fallback: first <img> with a non-trivial src
     const baseUrl = new URL(url);
-    const imgPattern = /<img\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/gi;
+    const imgPattern = /<img\b[^>]*\bsrc\s*=\s*/gi;
     let match;
 
     while ((match = imgPattern.exec(html)) !== null) {
-      const candidate = match[2];
-      if (!candidate) {
-        continue;
-      }
-
-      try {
-        const imageUrl = resolveImageUrl(candidate, baseUrl);
-        if (imageUrl) {
-          return imageUrl;
+      const rest = html.substring(match.index + match[0].length);
+      const srcMatch = rest.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/i);
+      if (srcMatch) {
+        const candidate = srcMatch[1] || srcMatch[2] || srcMatch[3];
+        if (candidate) {
+          try {
+            const imageUrl = resolveImageUrl(candidate, baseUrl);
+            if (imageUrl) {
+              return imageUrl;
+            }
+          } catch {
+            continue;
+          }
         }
-      } catch {
-        continue;
       }
     }
 
