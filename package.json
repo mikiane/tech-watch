@@ -1,7 +1,7 @@
 {
   "name": "tech-watch",
   "version": "1.0.0",
-  "description": "Daily tech, AI, and geopolitics watch aggregator built with Fastify and RSS feeds.",
+  "description": "Daily tech and AI watch aggregator built with Fastify and RSS feeds.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

@@ -1,11 +1,11 @@
 # tech-watch
 
-`tech-watch` is a self-contained Node.js news watch app for daily monitoring of tech, AI, and geopolitics. It aggregates public RSS feeds, caches them in memory, groups stories by category, and serves a lightweight Fastify + EJS web interface that is ready for Coolify Docker deployment.
+`tech-watch` is a self-contained Node.js news watch app for daily monitoring of tech and AI. It aggregates public RSS feeds, caches them in memory, groups stories by category, and serves a lightweight Fastify + EJS web interface that is ready for Coolify Docker deployment.
 
 ## Features
 
 - Fastify server with EJS-rendered web UI
-- Public RSS aggregation across Tech, AI, and Geopolitics
+- Public RSS aggregation across Tech and AI
 - In-memory caching with automatic refresh every 6 hours by default
 - Per-feed failure isolation so one broken source does not break the page
 - Sorted newest-first article display with source attribution and timestamps
@@ -27,13 +27,6 @@
 - VentureBeat AI: `https://venturebeat.com/category/ai/feed`
 - Hugging Face Blog: `https://huggingface.co/blog/feed.xml`
 - MIT News AI: `https://news.mit.edu/rss/topic/artificial-intelligence2`
-
-### Geopolitics
-
-- BBC World: `https://feeds.bbci.co.uk/news/world/rss.xml`
-- Al Jazeera: `https://www.aljazeera.com/xml/rss/all.xml`
-- The Guardian World: `https://www.theguardian.com/world/rss`
-- Foreign Affairs: `https://www.foreignaffairs.com/rss.xml`
 
 ## Local run
 

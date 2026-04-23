@@ -3,21 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tech Watch — Daily Tech, AI and Geopolitics News</title>
+    <title>Tech Watch — Daily Tech and AI News</title>
     <meta
       name="description"
-      content="Curated news from trusted sources across technology, artificial intelligence, and world geopolitics. Updated every 6 hours."
+      content="Curated news from trusted sources across technology and artificial intelligence. Updated every 6 hours."
     />
     <link rel="icon" type="image/svg+xml" href="/public/favicon.svg" />
     <link rel="stylesheet" href="/public/style.css" />
   </head>
   <body>
-    <% const categoryIcons = { Tech: '💻', AI: '🧠', Geopolitics: '🌍' }; %>
+    <% const categoryIcons = { Tech: '💻', AI: '🧠' }; %>
     <% const filterChips = [
       { value: 'all', label: 'All' },
       { value: 'tech', label: '💻 Tech' },
-      { value: 'ai', label: '🧠 AI' },
-      { value: 'geopolitics', label: '🌍 Geopolitics' }
+      { value: 'ai', label: '🧠 AI' }
     ]; %>
     <div class="page-shell">
       <header class="hero">
@@ -25,8 +24,7 @@
           <p class="eyebrow">Daily Watchboard</p>
           <h1>tech-watch</h1>
           <p class="hero-copy">
-            Curated news from <%= totalSources %> trusted sources across technology, artificial intelligence,
-            and world geopolitics.
+            Curated news from <%= totalSources %> trusted sources across technology and artificial intelligence.
           </p>
           <div class="hero-actions">
             <button type="button" class="refresh-button" id="refreshButton">
