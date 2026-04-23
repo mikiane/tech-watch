@@ -30,7 +30,7 @@ const FEEDS = [
 
 const parser = new Parser({
   customFields: {
-    item: ['media:content', 'content:encoded', 'description']
+    item: ['media:content', 'media:thumbnail', 'itunes:image', 'content:encoded', 'description']
   }
 });
 
@@ -90,6 +90,58 @@ function truncate(value, length) {
   return `${value.slice(0, length - 1).trim()}…`;
 }
 
+function extractImageUrl(candidate) {
+  if (!candidate) {
+    return null;
+  }
+
+  if (typeof candidate === 'string') {
+    return candidate.trim() || null;
+  }
+
+  if (Array.isArray(candidate)) {
+    for (const entry of candidate) {
+      const url = extractImageUrl(entry);
+      if (url) {
+        return url;
+      }
+    }
+
+    return null;
+  }
+
+  if (typeof candidate === 'object') {
+    const mimeType = typeof candidate.type === 'string' ? candidate.type.toLowerCase() : '';
+    const medium = typeof candidate.medium === 'string' ? candidate.medium.toLowerCase() : '';
+
+    if ((mimeType && !mimeType.startsWith('image/')) || (medium && medium !== 'image')) {
+      return null;
+    }
+
+    return (
+      extractImageUrl(candidate.url) ||
+      extractImageUrl(candidate.href) ||
+      extractImageUrl(candidate.image) ||
+      extractImageUrl(candidate.$?.url) ||
+      extractImageUrl(candidate.$?.href)
+    );
+  }
+
+  return null;
+}
+
+function extractImage(item) {
+  return (
+    extractImageUrl(item.enclosure) ||
+    extractImageUrl(item.image) ||
+    extractImageUrl(item['media:content']) ||
+    extractImageUrl(item['media:thumbnail']) ||
+    extractImageUrl(item.itunes?.image) ||
+    extractImageUrl(item['itunes:image']) ||
+    null
+  );
+}
+
 function normalizeItem(feed, item) {
   const publishedAt =
     toDate(item.isoDate) ||
@@ -112,7 +164,8 @@ function normalizeItem(feed, item) {
     link: item.link || '#',
     publishedAt,
     publishedAtIso: publishedAt.toISOString(),
-    summary: truncate(summary, 220)
+    summary: truncate(summary, 220),
+    image: extractImage(item)
   };
 }
 

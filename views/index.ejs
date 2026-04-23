@@ -75,6 +75,15 @@
               <div class="article-list">
                 <% items.forEach((item) => { %>
                   <article class="article-card">
+                    <% if (item.image) { %>
+                      <div class="article-media">
+                        <img src="<%= item.image %>" alt="" loading="lazy" />
+                      </div>
+                    <% } else { %>
+                      <div class="article-media article-media-placeholder" aria-hidden="true">
+                        <span class="category-icon article-placeholder-icon"><%= categoryIcons[category] || '📰' %></span>
+                      </div>
+                    <% } %>
                     <div class="article-meta">
                       <span class="article-source"><span class="source-icon" aria-hidden="true">🌐</span><%= item.source %></span>
                       <span><%= relativeTime(item.publishedAt) %></span>
@@ -89,7 +98,7 @@
                     <% } %>
                     <div class="article-footer">
                       <time datetime="<%= item.publishedAtIso %>"><%= formatArticleDate(item.publishedAt) %> UTC</time>
-                      <a href="<%= item.link %>" target="_blank" rel="noreferrer">Open article</a>
+                      <a class="article-link" href="<%= item.link %>" target="_blank" rel="noreferrer">Open article</a>
                     </div>
                   </article>
                 <% }) %>
