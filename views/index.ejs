@@ -22,20 +22,17 @@
             Curated news from 12 trusted sources across technology, artificial intelligence,
             and world geopolitics.
           </p>
+          <div class="hero-actions">
+            <button type="button" class="refresh-button" id="refreshButton">
+              <span class="refresh-spinner" aria-hidden="true"></span>
+              <span class="refresh-button-label">Refresh</span>
+            </button>
+            <span class="hero-status-note">Auto-refreshes every <%= refreshIntervalHours %> hours.</span>
+          </div>
         </div>
-        <div class="hero-meta">
-          <div class="stat-card">
-            <span class="stat-label">Last updated</span>
-            <strong><%= lastUpdated %> UTC</strong>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">Items cached</span>
-            <strong><%= totalItems %></strong>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">Last refresh attempt</span>
-            <strong><%= lastAttemptedAt %> UTC</strong>
-          </div>
+        <div class="hero-meta hero-meta-compact">
+          <span class="pill">12 sources</span>
+          <span class="pill"><%= totalItems %> cached items</span>
         </div>
       </header>
 
@@ -111,7 +108,7 @@
 
       <section class="status-panel">
         <div class="status-header">
-          <h2>Feed status</h2>
+          <h2>Source health</h2>
           <p>Partial failures do not stop the page from rendering.</p>
         </div>
         <div class="status-table">
@@ -136,13 +133,33 @@
           <% }) %>
         </div>
       </section>
+
+      <footer class="footer-status-panel">
+        <div class="status-header">
+          <h2>Feed status</h2>
+          <p>Snapshot of the cache state after the most recent refresh cycle.</p>
+        </div>
+        <div class="footer-status-grid">
+          <div class="stat-card">
+            <span class="stat-label">Last updated</span>
+            <strong><%= lastUpdated %> UTC</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Items cached</span>
+            <strong><%= totalItems %></strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Last refresh attempt</span>
+            <strong><%= lastAttemptedAt %> UTC</strong>
+          </div>
+        </div>
+      </footer>
     </div>
     <script>
       (() => {
         const filter = document.getElementById('categoryFilter');
         const panels = document.querySelectorAll('.category-panel');
-
-        if (!filter || !panels.length) return;
+        const refreshButton = document.getElementById('refreshButton');
 
         const applyFilter = () => {
           const selected = filter.value;
@@ -153,8 +170,34 @@
           });
         };
 
-        filter.addEventListener('change', applyFilter);
-        applyFilter();
+        if (filter && panels.length) {
+          filter.addEventListener('change', applyFilter);
+          applyFilter();
+        }
+
+        if (!refreshButton) return;
+
+        refreshButton.addEventListener('click', async () => {
+          if (refreshButton.disabled) return;
+
+          refreshButton.disabled = true;
+          refreshButton.classList.add('is-loading');
+
+          try {
+            const response = await fetch('/api/refresh');
+
+            if (!response.ok) {
+              throw new Error('Refresh failed');
+            }
+
+            await response.json();
+            window.location.reload();
+          } catch (error) {
+            refreshButton.classList.remove('is-loading');
+            refreshButton.disabled = false;
+            window.alert('Refresh failed. Please try again.');
+          }
+        });
       })();
     </script>
   </body>

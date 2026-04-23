@@ -96,7 +96,7 @@ function extractImageUrl(candidate) {
   }
 
   if (typeof candidate === 'string') {
-    return candidate.trim() || null;
+    return cleanImageUrl(candidate);
   }
 
   if (Array.isArray(candidate)) {
@@ -130,6 +130,64 @@ function extractImageUrl(candidate) {
   return null;
 }
 
+function cleanImageUrl(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const trackingParams = [
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_term',
+      'utm_content',
+      'utm_id',
+      'utm_name',
+      'utm_cid',
+      'utm_reader',
+      'utm_referrer',
+      'utm_social',
+      'utm_social-type',
+      'fbclid',
+      'gclid',
+      'mc_cid',
+      'mc_eid',
+      'igshid',
+      'ref',
+      'ref_src',
+      'source'
+    ];
+
+    for (const key of trackingParams) {
+      url.searchParams.delete(key);
+    }
+
+    return url.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractImageFromHtml(htmlString) {
+  if (!htmlString || typeof htmlString !== 'string') {
+    return null;
+  }
+
+  const match = htmlString.match(/<img\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/i);
+  if (!match?.[2]) {
+    return null;
+  }
+
+  return cleanImageUrl(match[2]);
+}
+
 function extractImage(item) {
   return (
     extractImageUrl(item.enclosure) ||
@@ -138,6 +196,8 @@ function extractImage(item) {
     extractImageUrl(item['media:thumbnail']) ||
     extractImageUrl(item.itunes?.image) ||
     extractImageUrl(item['itunes:image']) ||
+    extractImageFromHtml(item.description) ||
+    extractImageFromHtml(item['content:encoded']) ||
     null
   );
 }
@@ -277,6 +337,10 @@ async function refreshCache() {
   }
 }
 
+async function fetchAllFeeds() {
+  return refreshCache();
+}
+
 function formatTimestamp(value) {
   if (!value) {
     return 'Never';
@@ -337,6 +401,19 @@ async function bootstrap() {
       feedStatuses: cache.feedStatuses,
       formatArticleDate: formatTimestamp,
       relativeTime
+    });
+  });
+
+  app.get('/api/refresh', async (_request, reply) => {
+    const updatedCache = await fetchAllFeeds();
+
+    return reply.send({
+      categories: updatedCache.categories,
+      lastUpdated: updatedCache.lastUpdated ? updatedCache.lastUpdated.toISOString() : null,
+      lastAttemptedAt: updatedCache.lastAttemptedAt ? updatedCache.lastAttemptedAt.toISOString() : null,
+      feedStatuses: updatedCache.feedStatuses,
+      hasData: updatedCache.hasData,
+      totalItems: updatedCache.totalItems
     });
   });
 
