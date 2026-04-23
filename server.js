@@ -319,6 +319,13 @@ async function bootstrap() {
     root: path.join(__dirname, 'views')
   });
 
+  const fs = require('fs');
+  const faviconPath = path.join(__dirname, 'public', 'favicon.svg');
+
+  app.get('/favicon.ico', (_request, reply) => {
+    return reply.header('Content-Type', 'image/svg+xml').send(fs.readFileSync(faviconPath));
+  });
+
   app.get('/', async (_request, reply) => {
     return reply.view('index.ejs', {
       categories: cache.categories,
