@@ -11,29 +11,50 @@ const HOST = process.env.HOST || '0.0.0.0';
 const REFRESH_INTERVAL_MS = Number(process.env.REFRESH_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 15000);
 const MAX_ITEMS_PER_FEED = Number(process.env.MAX_ITEMS_PER_FEED || 12);
-const MAX_ITEMS_PER_CATEGORY = Number(process.env.MAX_ITEMS_PER_CATEGORY || 24);
+const MAX_TOTAL_ITEMS = Number(process.env.MAX_TOTAL_ITEMS || 72);
 const ARTICLE_SCRAPE_TIMEOUT_MS = 5000;
 const ARTICLE_SCRAPE_CONCURRENCY = 20;
 const ARTICLE_SCRAPE_DELAY_MS = 50;
 
 const FEEDS = [
+  { category: 'Tech', source: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/index' },
   { category: 'Tech', source: 'TechCrunch', url: 'https://techcrunch.com/feed/' },
   { category: 'Tech', source: 'The Verge', url: 'https://www.theverge.com/rss/index.xml' },
-  { category: 'Tech', source: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/index' },
-  { category: 'Tech', source: 'Hacker News', url: 'https://hnrss.org/frontpage' },
-  { category: 'AI', source: 'OpenAI News', url: 'https://openai.com/news/rss.xml' },
-  { category: 'AI', source: 'VentureBeat AI', url: 'https://venturebeat.com/category/ai/feed' },
+  { category: 'Tech', source: 'Wired', url: 'https://www.wired.com/feed/rss' },
+  { category: 'Tech', source: 'Hacker News', url: 'https://hnrss.org/frontpage?count=20' },
+  { category: 'Tech', source: '9to5Mac', url: 'https://9to5mac.com/guides/feed/' },
+  { category: 'Tech', source: 'The Register', url: 'https://www.theregister.co.uk/headlines.atom' },
+  { category: 'Tech', source: 'Engadget', url: 'https://www.engadget.com/rss.xml' },
+  { category: 'Tech', source: 'VentureBeat', url: 'https://venturebeat.com/feed/' },
+  { category: 'AI', source: 'AI News', url: 'https://www.aifor.org/feed/' },
+  { category: 'AI', source: 'OpenAI Blog', url: 'https://openai.com/blog/rss' },
+  { category: 'AI', source: 'Google AI Blog', url: 'https://blog.google/rss/' },
   { category: 'AI', source: 'Hugging Face Blog', url: 'https://huggingface.co/blog/feed.xml' },
-  { category: 'AI', source: 'MIT News AI', url: 'https://news.mit.edu/rss/topic/artificial-intelligence2' },
+  { category: 'AI', source: 'MIT Technology Review AI', url: 'https://www.technologyreview.com/topic/artificial-intelligence/feed/' },
+  { category: 'AI', source: 'Andrej Karpathy', url: 'https://karpathy.github.io/atom.xml' },
   { category: 'Geopolitics', source: 'BBC World', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
   { category: 'Geopolitics', source: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
+  { category: 'Geopolitics', source: 'Reuters World', url: 'https://www.reuters.org/pf/rss/feed/world/' },
   { category: 'Geopolitics', source: 'The Guardian World', url: 'https://www.theguardian.com/world/rss' },
-  { category: 'Geopolitics', source: 'Foreign Affairs', url: 'https://www.foreignaffairs.com/rss.xml' }
+  { category: 'Geopolitics', source: 'Foreign Policy', url: 'https://foreignpolicy.com/feed/rss/' },
+  { category: 'Geopolitics', source: 'Reuters Politics', url: 'https://www.reuters.org/pf/rss/feed/politics/' }
 ];
 
 const parser = new Parser({
   customFields: {
-    item: ['media:content', 'media:thumbnail', 'itunes:image', 'content:encoded', 'description']
+    item: [
+      'media:content',
+      'media:thumbnail',
+      'media:group',
+      'media:description',
+      'itunes:image',
+      'content:encoded',
+      'description',
+      'summary',
+      'content',
+      'published',
+      'updated'
+    ]
   }
 });
 
@@ -46,7 +67,7 @@ const app = Fastify({
 });
 
 const cache = {
-  categories: buildEmptyCategories(),
+  articles: [],
   lastUpdated: null,
   lastAttemptedAt: null,
   feedStatuses: [],
@@ -55,14 +76,6 @@ const cache = {
 };
 
 let refreshInFlight = null;
-
-function buildEmptyCategories() {
-  return {
-    Tech: [],
-    AI: [],
-    Geopolitics: []
-  };
-}
 
 function toDate(value) {
   if (!value) {
@@ -83,6 +96,19 @@ function stripHtml(value) {
     .replace(/&nbsp;/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function decodeHtmlEntities(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function truncate(value, length) {
@@ -172,9 +198,9 @@ function cleanImageUrl(value) {
       url.searchParams.delete(key);
     }
 
-    return url.toString();
+    return decodeHtmlEntities(url.toString());
   } catch {
-    return trimmed;
+    return decodeHtmlEntities(trimmed);
   }
 }
 
@@ -203,12 +229,86 @@ function extractImageFromHtml(htmlString) {
   return cleanImageUrl(match[2]);
 }
 
+function sanitizeXml(xml) {
+  if (!xml || typeof xml !== 'string') {
+    return xml;
+  }
+
+  return xml.replace(/&(?!(?:#\d+|#x[\da-f]+|amp|lt|gt|quot|apos);)/gi, '&amp;');
+}
+
+function extractAlternateFeedUrl(html, baseUrl) {
+  if (!html || typeof html !== 'string') {
+    return null;
+  }
+
+  const linkRegex = /<link\b[^>]*>/gi;
+  let match;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    const tag = match[0];
+    const relMatch = tag.match(/\brel\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const typeMatch = tag.match(/\btype\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const hrefMatch = tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const rel = (relMatch?.[1] || relMatch?.[2] || '').toLowerCase();
+    const type = (typeMatch?.[1] || typeMatch?.[2] || '').toLowerCase();
+    const href = hrefMatch?.[1] || hrefMatch?.[2];
+
+    if (!href || !rel.includes('alternate')) {
+      continue;
+    }
+
+    if (!type.includes('rss') && !type.includes('atom') && !type.includes('xml')) {
+      continue;
+    }
+
+    try {
+      return new URL(decodeHtmlEntities(href), baseUrl).toString();
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function buildFeedRequestOptions(signal) {
+  return {
+    signal,
+    redirect: 'follow',
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 tech-watch/1.0',
+      accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8'
+    }
+  };
+}
+
+async function fetchDiscoveredFeedResponse(url, signal) {
+  const response = await fetch(url, buildFeedRequestOptions(signal));
+  const body = await response.text();
+
+  if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
+    const alternateFeedUrl = extractAlternateFeedUrl(body, response.url || url);
+
+    if (alternateFeedUrl) {
+      const alternateResponse = await fetch(alternateFeedUrl, buildFeedRequestOptions(signal));
+      return {
+        response: alternateResponse,
+        body: await alternateResponse.text()
+      };
+    }
+  }
+
+  return { response, body };
+}
+
 function extractImageFromMetadata(item) {
   return (
     extractImageUrl(item.enclosure) ||
     extractImageUrl(item.image) ||
     extractImageUrl(item['media:content']) ||
     extractImageUrl(item['media:thumbnail']) ||
+    extractImageUrl(item['media:group']) ||
     extractImageUrl(item.itunes?.image) ||
     extractImageUrl(item['itunes:image']) ||
     null
@@ -370,6 +470,8 @@ function normalizeItem(feed, item) {
     toDate(item.isoDate) ||
     toDate(item.pubDate) ||
     toDate(item.date) ||
+    toDate(item.published) ||
+    toDate(item.updated) ||
     new Date(0);
 
   const summary = stripHtml(
@@ -400,19 +502,41 @@ async function fetchFeed(feed) {
   const startedAt = Date.now();
 
   try {
-    const response = await fetch(feed.url, {
-      signal: controller.signal,
-      headers: {
-        'user-agent': 'tech-watch/1.0 (+https://coolify.io)'
-      }
-    });
+    let { response, body: xml } = await fetchDiscoveredFeedResponse(feed.url, controller.signal);
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      try {
+        const rootUrl = new URL('/', feed.url).toString();
+        const fallback = await fetchDiscoveredFeedResponse(rootUrl, controller.signal);
+
+        if (fallback.response.ok) {
+          response = fallback.response;
+          xml = fallback.body;
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch {
+        throw new Error(`HTTP ${response.status}`);
+      }
     }
 
-    const xml = await response.text();
-    const parsed = await parser.parseString(xml);
+    if (response.headers.get('content-type')?.includes('text/html')) {
+      const alternateFeedUrl = extractAlternateFeedUrl(xml, response.url || feed.url);
+
+      if (!alternateFeedUrl) {
+        throw new Error('Feed not recognized as RSS 1 or 2.');
+      }
+
+      response = await fetch(alternateFeedUrl, buildFeedRequestOptions(controller.signal));
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      xml = await response.text();
+    }
+
+    const parsed = await parser.parseString(sanitizeXml(xml));
     const items = (parsed.items || [])
       .map((item) => normalizeItem(feed, item))
       .filter((item) => item.link && item.title)
@@ -453,7 +577,7 @@ async function refreshCache() {
     cache.lastAttemptedAt = new Date();
 
     const results = await Promise.all(FEEDS.map((feed) => fetchFeed(feed)));
-    const nextCategories = buildEmptyCategories();
+    const nextArticles = [];
     let totalItems = 0;
     let metadataImageCount = 0;
     let htmlImageCount = 0;
@@ -474,7 +598,7 @@ async function refreshCache() {
           }
         }
 
-        nextCategories[result.category].push(...result.items);
+        nextArticles.push(...result.items);
         totalItems += result.items.length;
       }
     }
@@ -497,23 +621,18 @@ async function refreshCache() {
       }
     });
 
-    for (const category of Object.keys(nextCategories)) {
-      nextCategories[category] = nextCategories[category].map((item) => {
+    const sortedArticles = nextArticles
+      .map((item) => {
         delete item._rssItem;
         return item;
-      });
-    }
-
-    for (const category of Object.keys(nextCategories)) {
-      nextCategories[category] = nextCategories[category]
-        .sort((a, b) => b.publishedAt - a.publishedAt)
-        .slice(0, MAX_ITEMS_PER_CATEGORY);
-    }
+      })
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+      .slice(0, MAX_TOTAL_ITEMS);
 
     const successfulFeeds = results.filter((result) => result.ok).length;
     if (successfulFeeds > 0) {
-      cache.categories = nextCategories;
-      cache.totalItems = totalItems;
+      cache.articles = sortedArticles;
+      cache.totalItems = sortedArticles.length;
       cache.lastUpdated = new Date();
       cache.hasData = true;
     }
@@ -606,10 +725,11 @@ async function bootstrap() {
 
   app.get('/', async (_request, reply) => {
     return reply.view('index.ejs', {
-      categories: cache.categories,
+      articles: cache.articles,
       lastUpdated: formatTimestamp(cache.lastUpdated),
       lastAttemptedAt: formatTimestamp(cache.lastAttemptedAt),
       totalItems: cache.totalItems,
+      totalSources: FEEDS.length,
       refreshIntervalHours: REFRESH_INTERVAL_MS / (60 * 60 * 1000),
       hasData: cache.hasData,
       feedStatuses: cache.feedStatuses,
@@ -622,7 +742,7 @@ async function bootstrap() {
     const updatedCache = await fetchAllFeeds();
 
     return reply.send({
-      categories: updatedCache.categories,
+      articles: updatedCache.articles,
       lastUpdated: updatedCache.lastUpdated ? updatedCache.lastUpdated.toISOString() : null,
       lastAttemptedAt: updatedCache.lastAttemptedAt ? updatedCache.lastAttemptedAt.toISOString() : null,
       feedStatuses: updatedCache.feedStatuses,

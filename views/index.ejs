@@ -6,20 +6,26 @@
     <title>Tech Watch — Daily Tech, AI and Geopolitics News</title>
     <meta
       name="description"
-      content="Curated news from 12 trusted sources across technology, artificial intelligence, and world geopolitics. Updated every 6 hours."
+      content="Curated news from trusted sources across technology, artificial intelligence, and world geopolitics. Updated every 6 hours."
     />
     <link rel="icon" type="image/svg+xml" href="/public/favicon.svg" />
     <link rel="stylesheet" href="/public/style.css" />
   </head>
   <body>
     <% const categoryIcons = { Tech: '💻', AI: '🧠', Geopolitics: '🌍' }; %>
+    <% const filterChips = [
+      { value: 'all', label: 'All' },
+      { value: 'tech', label: '💻 Tech' },
+      { value: 'ai', label: '🧠 AI' },
+      { value: 'geopolitics', label: '🌍 Geopolitics' }
+    ]; %>
     <div class="page-shell">
       <header class="hero">
         <div>
           <p class="eyebrow">Daily Watchboard</p>
           <h1>tech-watch</h1>
           <p class="hero-copy">
-            Curated news from 12 trusted sources across technology, artificial intelligence,
+            Curated news from <%= totalSources %> trusted sources across technology, artificial intelligence,
             and world geopolitics.
           </p>
           <div class="hero-actions">
@@ -31,7 +37,7 @@
           </div>
         </div>
         <div class="hero-meta hero-meta-compact">
-          <span class="pill">12 sources</span>
+          <span class="pill"><%= totalSources %> sources</span>
           <span class="pill"><%= totalItems %> cached items</span>
         </div>
       </header>
@@ -44,66 +50,64 @@
       <% } %>
 
       <section class="filter-bar" aria-label="Article category filter">
-        <label class="filter-label" for="categoryFilter">Filter articles</label>
-        <select id="categoryFilter" class="filter-select">
-          <option value="all">All sources</option>
-          <option value="tech">Tech only</option>
-          <option value="ai">AI only</option>
-          <option value="geopolitics">Geopolitics only</option>
-        </select>
+        <div>
+          <p class="filter-label">Filter articles</p>
+          <p class="filter-copy">All articles are mixed into one feed and sorted newest first.</p>
+        </div>
+        <div class="filter-chips" role="tablist" aria-label="Category filters">
+          <% filterChips.forEach((chip) => { %>
+            <button
+              type="button"
+              class="filter-chip <%= chip.value === 'all' ? 'is-active' : '' %>"
+              data-filter="<%= chip.value %>"
+              aria-pressed="<%= chip.value === 'all' ? 'true' : 'false' %>"
+            >
+              <%= chip.label %>
+            </button>
+          <% }) %>
+        </div>
       </section>
 
-      <main class="content-grid">
-        <% Object.entries(categories).forEach(([category, items]) => { %>
-          <section class="category-panel" data-category="<%= category.toLowerCase() %>">
-            <div class="category-header">
-              <div class="category-title">
-                <span class="category-icon" aria-hidden="true"><%= categoryIcons[category] || '📰' %></span>
-                <div>
-                  <p class="category-kicker">Category</p>
-                  <h2><%= category %></h2>
-                </div>
-              </div>
-              <span class="pill"><%= items.length %> items</span>
-            </div>
-
-            <% if (items.length === 0) { %>
-              <p class="empty-copy">No articles available for this category right now.</p>
-            <% } else { %>
-              <div class="article-list">
-                <% items.forEach((item) => { %>
-                  <article class="article-card">
-                    <% if (item.image) { %>
-                      <div class="article-media">
-                        <img src="<%= item.image %>" alt="" loading="lazy" />
-                      </div>
-                    <% } else { %>
-                      <div class="article-media article-media-placeholder" aria-hidden="true">
-                        <span class="category-icon article-placeholder-icon"><%= categoryIcons[category] || '📰' %></span>
-                      </div>
-                    <% } %>
-                    <div class="article-meta">
-                      <span class="article-source"><span class="source-icon" aria-hidden="true">🌐</span><%= item.source %></span>
-                      <span><%= relativeTime(item.publishedAt) %></span>
-                    </div>
-                    <h3>
-                      <a href="<%= item.link %>" target="_blank" rel="noreferrer">
-                        <%= item.title %>
-                      </a>
-                    </h3>
-                    <% if (item.summary) { %>
-                      <p><%= item.summary %></p>
-                    <% } %>
-                    <div class="article-footer">
-                      <time datetime="<%= item.publishedAtIso %>"><%= formatArticleDate(item.publishedAt) %> UTC</time>
-                      <a class="article-link" href="<%= item.link %>" target="_blank" rel="noreferrer">Open article</a>
-                    </div>
-                  </article>
-                <% }) %>
-              </div>
-            <% } %>
+      <main class="article-feed" id="articleFeed">
+        <% if (articles.length === 0) { %>
+          <section class="empty-state">
+            <h2>No articles available</h2>
+            <p>The cache is warm, but no items matched the current refresh cycle.</p>
           </section>
-        <% }) %>
+        <% } else { %>
+          <% articles.forEach((item) => { %>
+            <article class="article-card" data-category="<%= item.category.toLowerCase() %>">
+              <% if (item.image) { %>
+                <div class="article-media">
+                  <img src="<%= item.image %>" alt="" loading="lazy" />
+                </div>
+              <% } else { %>
+                <div class="article-media article-media-placeholder" aria-hidden="true">
+                  <span class="category-icon article-placeholder-icon"><%= categoryIcons[item.category] || '📰' %></span>
+                </div>
+              <% } %>
+              <div class="article-meta">
+                <span class="article-category-badge">
+                  <span aria-hidden="true"><%= categoryIcons[item.category] || '📰' %></span>
+                  <%= item.category %>
+                </span>
+                <span><%= relativeTime(item.publishedAt) %></span>
+              </div>
+              <h3>
+                <a href="<%= item.link %>" target="_blank" rel="noreferrer">
+                  <%= item.title %>
+                </a>
+              </h3>
+              <% if (item.summary) { %>
+                <p><%= item.summary %></p>
+              <% } %>
+              <div class="article-footer">
+                <span class="article-source"><span class="source-icon" aria-hidden="true">🌐</span><%= item.source %></span>
+                <time datetime="<%= item.publishedAtIso %>"><%= formatArticleDate(item.publishedAt) %> UTC</time>
+              </div>
+            </article>
+          <% }) %>
+        <% } %>
       </main>
 
       <section class="status-panel">
@@ -157,21 +161,32 @@
     </div>
     <script>
       (() => {
-        const filter = document.getElementById('categoryFilter');
-        const panels = document.querySelectorAll('.category-panel');
+        const filterChips = Array.from(document.querySelectorAll('.filter-chip'));
+        const cards = document.querySelectorAll('.article-card');
         const refreshButton = document.getElementById('refreshButton');
+        let activeFilter = 'all';
 
         const applyFilter = () => {
-          const selected = filter.value;
+          cards.forEach((card) => {
+            const matches = activeFilter === 'all' || card.dataset.category === activeFilter;
+            card.hidden = !matches;
+          });
 
-          panels.forEach((panel) => {
-            const matches = selected === 'all' || panel.dataset.category === selected;
-            panel.hidden = !matches;
+          filterChips.forEach((chip) => {
+            const isActive = chip.dataset.filter === activeFilter;
+            chip.classList.toggle('is-active', isActive);
+            chip.setAttribute('aria-pressed', String(isActive));
           });
         };
 
-        if (filter && panels.length) {
-          filter.addEventListener('change', applyFilter);
+        if (filterChips.length && cards.length) {
+          filterChips.forEach((chip) => {
+            chip.addEventListener('click', () => {
+              activeFilter = chip.dataset.filter || 'all';
+              applyFilter();
+            });
+          });
+
           applyFilter();
         }
 
