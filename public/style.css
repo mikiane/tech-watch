@@ -293,6 +293,10 @@ h1 {
   font-weight: 700;
 }
 
+.article-card[hidden] {
+  display: none !important;
+}
+
 .article-card {
   display: flex;
   flex-direction: column;
