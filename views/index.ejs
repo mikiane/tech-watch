@@ -3,18 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>tech-watch</title>
+    <title>Tech Watch — Daily Tech, AI and Geopolitics News</title>
+    <meta
+      name="description"
+      content="Curated news from 12 trusted sources across technology, artificial intelligence, and world geopolitics. Updated every 6 hours."
+    />
     <link rel="stylesheet" href="/public/style.css" />
   </head>
   <body>
+    <% const categoryIcons = { Tech: '💻', AI: '🧠', Geopolitics: '🌍' }; %>
     <div class="page-shell">
       <header class="hero">
         <div>
           <p class="eyebrow">Daily Watchboard</p>
           <h1>tech-watch</h1>
           <p class="hero-copy">
-            A live public-RSS watch across tech, AI, and geopolitics. Feeds refresh every
-            <strong><%= refreshIntervalHours %> hours</strong>.
+            Curated news from 12 trusted sources across technology, artificial intelligence,
+            and world geopolitics.
           </p>
         </div>
         <div class="hero-meta">
@@ -40,13 +45,26 @@
         </section>
       <% } %>
 
+      <section class="filter-bar" aria-label="Article category filter">
+        <label class="filter-label" for="categoryFilter">Filter articles</label>
+        <select id="categoryFilter" class="filter-select">
+          <option value="all">All sources</option>
+          <option value="tech">Tech only</option>
+          <option value="ai">AI only</option>
+          <option value="geopolitics">Geopolitics only</option>
+        </select>
+      </section>
+
       <main class="content-grid">
         <% Object.entries(categories).forEach(([category, items]) => { %>
-          <section class="category-panel">
+          <section class="category-panel" data-category="<%= category.toLowerCase() %>">
             <div class="category-header">
-              <div>
-                <p class="category-kicker">Category</p>
-                <h2><%= category %></h2>
+              <div class="category-title">
+                <span class="category-icon" aria-hidden="true"><%= categoryIcons[category] || '📰' %></span>
+                <div>
+                  <p class="category-kicker">Category</p>
+                  <h2><%= category %></h2>
+                </div>
               </div>
               <span class="pill"><%= items.length %> items</span>
             </div>
@@ -58,7 +76,7 @@
                 <% items.forEach((item) => { %>
                   <article class="article-card">
                     <div class="article-meta">
-                      <span><%= item.source %></span>
+                      <span class="article-source"><span class="source-icon" aria-hidden="true">🌐</span><%= item.source %></span>
                       <span><%= relativeTime(item.publishedAt) %></span>
                     </div>
                     <h3>
@@ -109,5 +127,25 @@
         </div>
       </section>
     </div>
+    <script>
+      (() => {
+        const filter = document.getElementById('categoryFilter');
+        const panels = document.querySelectorAll('.category-panel');
+
+        if (!filter || !panels.length) return;
+
+        const applyFilter = () => {
+          const selected = filter.value;
+
+          panels.forEach((panel) => {
+            const matches = selected === 'all' || panel.dataset.category === selected;
+            panel.hidden = !matches;
+          });
+        };
+
+        filter.addEventListener('change', applyFilter);
+        applyFilter();
+      })();
+    </script>
   </body>
 </html>
