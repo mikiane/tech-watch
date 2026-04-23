@@ -12,6 +12,9 @@ const REFRESH_INTERVAL_MS = Number(process.env.REFRESH_INTERVAL_MS || 6 * 60 * 6
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 15000);
 const MAX_ITEMS_PER_FEED = Number(process.env.MAX_ITEMS_PER_FEED || 12);
 const MAX_ITEMS_PER_CATEGORY = Number(process.env.MAX_ITEMS_PER_CATEGORY || 24);
+const ARTICLE_SCRAPE_TIMEOUT_MS = 5000;
+const ARTICLE_SCRAPE_CONCURRENCY = 20;
+const ARTICLE_SCRAPE_DELAY_MS = 50;
 
 const FEEDS = [
   { category: 'Tech', source: 'TechCrunch', url: 'https://techcrunch.com/feed/' },
@@ -175,6 +178,18 @@ function cleanImageUrl(value) {
   }
 }
 
+function resolveImageUrl(candidate, baseUrl) {
+  if (!candidate || typeof candidate !== 'string') {
+    return null;
+  }
+
+  try {
+    return cleanImageUrl(new URL(candidate, baseUrl).toString());
+  } catch {
+    return cleanImageUrl(candidate);
+  }
+}
+
 function extractImageFromHtml(htmlString) {
   if (!htmlString || typeof htmlString !== 'string') {
     return null;
@@ -188,7 +203,7 @@ function extractImageFromHtml(htmlString) {
   return cleanImageUrl(match[2]);
 }
 
-function extractImage(item) {
+function extractImageFromMetadata(item) {
   return (
     extractImageUrl(item.enclosure) ||
     extractImageUrl(item.image) ||
@@ -196,13 +211,165 @@ function extractImage(item) {
     extractImageUrl(item['media:thumbnail']) ||
     extractImageUrl(item.itunes?.image) ||
     extractImageUrl(item['itunes:image']) ||
+    null
+  );
+}
+
+function extractImage(item) {
+  return (
+    extractImageFromMetadata(item) ||
     extractImageFromHtml(item.description) ||
     extractImageFromHtml(item['content:encoded']) ||
     null
   );
 }
 
+function extractInitialImage(item) {
+  const metadataImage = extractImageFromMetadata(item);
+  if (metadataImage) {
+    return {
+      image: metadataImage,
+      imageSource: 'metadata'
+    };
+  }
+
+  const htmlImage =
+    extractImageFromHtml(item.description) ||
+    extractImageFromHtml(item['content:encoded']) ||
+    null;
+
+  if (htmlImage) {
+    return {
+      image: htmlImage,
+      imageSource: 'html'
+    };
+  }
+
+  return {
+    image: null,
+    imageSource: null
+  };
+}
+
+async function scrapeArticleImage(url) {
+  if (!url) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ARTICLE_SCRAPE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const html = await response.text();
+    const ogImageMatch = html.match(
+      /<meta\b[^>]*property\s*=\s*(["'])og:image\1[^>]*content\s*=\s*(["'])(.*?)\2[^>]*>/i
+    ) || html.match(
+      /<meta\b[^>]*content\s*=\s*(["'])(.*?)\1[^>]*property\s*=\s*(["'])og:image\3[^>]*>/i
+    );
+
+    if (ogImageMatch) {
+      const ogImage = resolveImageUrl(ogImageMatch[2] || ogImageMatch[3], url);
+      if (ogImage) {
+        return ogImage;
+      }
+    }
+
+    const twitterImageMatch = html.match(
+      /<meta\b[^>]*name\s*=\s*(["'])twitter:image\1[^>]*content\s*=\s*(["'])(.*?)\2[^>]*>/i
+    ) || html.match(
+      /<meta\b[^>]*content\s*=\s*(["'])(.*?)\1[^>]*name\s*=\s*(["'])twitter:image\3[^>]*>/i
+    );
+
+    if (twitterImageMatch) {
+      const twitterImage = resolveImageUrl(twitterImageMatch[2] || twitterImageMatch[3], url);
+      if (twitterImage) {
+        return twitterImage;
+      }
+    }
+
+    const baseUrl = new URL(url);
+    const imgPattern = /<img\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/gi;
+    let match;
+
+    while ((match = imgPattern.exec(html)) !== null) {
+      const candidate = match[2];
+      if (!candidate) {
+        continue;
+      }
+
+      try {
+        const imageUrl = resolveImageUrl(candidate, baseUrl);
+        if (imageUrl) {
+          return imageUrl;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function extractImageWithFallback(item, logger) {
+  const initialImage = extractInitialImage(item);
+  if (initialImage.image) {
+    return initialImage;
+  }
+
+  const scrapedImage = await scrapeArticleImage(item.link);
+  if (scrapedImage) {
+    logger.info({ url: item.link, image: scrapedImage }, 'Scraped article image');
+    return {
+      image: scrapedImage,
+      imageSource: 'scraping'
+    };
+  }
+
+  logger.info({ url: item.link }, 'No article image found during scrape');
+  return initialImage;
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 function normalizeItem(feed, item) {
+  const initialImage = extractInitialImage(item);
   const publishedAt =
     toDate(item.isoDate) ||
     toDate(item.pubDate) ||
@@ -225,7 +392,9 @@ function normalizeItem(feed, item) {
     publishedAt,
     publishedAtIso: publishedAt.toISOString(),
     summary: truncate(summary, 220),
-    image: extractImage(item)
+    image: initialImage.image,
+    imageSource: initialImage.imageSource,
+    _rssItem: item
   };
 }
 
@@ -290,12 +459,53 @@ async function refreshCache() {
     const results = await Promise.all(FEEDS.map((feed) => fetchFeed(feed)));
     const nextCategories = buildEmptyCategories();
     let totalItems = 0;
+    let metadataImageCount = 0;
+    let htmlImageCount = 0;
+    let scrapedImageCount = 0;
+
+    const itemsToScrape = [];
+    let nextScrapeAt = Date.now();
 
     for (const result of results) {
       if (result.ok) {
+        for (const item of result.items) {
+          if (item.imageSource === 'metadata') {
+            metadataImageCount += 1;
+          } else if (item.imageSource === 'html') {
+            htmlImageCount += 1;
+          } else {
+            itemsToScrape.push(item);
+          }
+        }
+
         nextCategories[result.category].push(...result.items);
         totalItems += result.items.length;
       }
+    }
+
+    await mapWithConcurrency(itemsToScrape, ARTICLE_SCRAPE_CONCURRENCY, async (item, index) => {
+      const now = Date.now();
+      const scheduledAt = Math.max(nextScrapeAt, now);
+      nextScrapeAt = scheduledAt + ARTICLE_SCRAPE_DELAY_MS;
+
+      if (scheduledAt > now) {
+        await new Promise((resolve) => setTimeout(resolve, scheduledAt - now));
+      }
+
+      const extracted = await extractImageWithFallback(item._rssItem, app.log);
+      item.image = extracted.image;
+      item.imageSource = extracted.imageSource;
+
+      if (item.imageSource === 'scraping') {
+        scrapedImageCount += 1;
+      }
+    });
+
+    for (const category of Object.keys(nextCategories)) {
+      nextCategories[category] = nextCategories[category].map((item) => {
+        delete item._rssItem;
+        return item;
+      });
     }
 
     for (const category of Object.keys(nextCategories)) {
@@ -322,10 +532,18 @@ async function refreshCache() {
     }));
 
     app.log.info({
+      metadataImageCount,
+      htmlImageCount,
+      scrapedImageCount,
+      totalArticles: totalItems,
+      stats: `Image extraction: ${metadataImageCount} from metadata, ${htmlImageCount} from HTML, ${scrapedImageCount} from scraping, total articles: ${totalItems}`,
       successfulFeeds,
       totalFeeds: results.length,
       totalItems: cache.totalItems
     }, 'RSS refresh completed');
+    app.log.info(
+      `Image extraction: ${metadataImageCount} from metadata, ${htmlImageCount} from HTML, ${scrapedImageCount} from scraping, total articles: ${totalItems}`
+    );
 
     return cache;
   })();
