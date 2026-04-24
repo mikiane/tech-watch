@@ -273,7 +273,7 @@ async function generateClubIaMessage({ title, summary, url }) {
           }
         ],
         temperature: 0.8,
-        max_tokens: 160
+        max_completion_tokens: 160
       })
     });
 
