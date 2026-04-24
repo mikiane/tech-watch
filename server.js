@@ -272,7 +272,7 @@ async function generateClubIaMessage({ title, summary, url }) {
             content: buildClubIaPrompt({ title, summary, url })
           }
         ],
-        max_completion_tokens: 160
+        max_completion_tokens: 2048
       })
     });
 
