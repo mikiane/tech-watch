@@ -15,6 +15,13 @@ const MAX_TOTAL_ITEMS = Number(process.env.MAX_TOTAL_ITEMS || 72);
 const ARTICLE_SCRAPE_TIMEOUT_MS = 5000;
 const ARTICLE_SCRAPE_CONCURRENCY = 20;
 const ARTICLE_SCRAPE_DELAY_MS = 50;
+const CLUB_IA_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const CLUB_IA_RATE_LIMIT_MAX = 10;
+const CLUB_IA_OPENAI_TIMEOUT_MS = 20000;
+const CLUB_IA_MAX_TITLE_LENGTH = 220;
+const CLUB_IA_MAX_SUMMARY_LENGTH = 1200;
+const CLUB_IA_MAX_URL_LENGTH = 320;
+const CLUB_IA_MAX_MESSAGE_LENGTH = 400;
 
 const FEEDS = [
   { category: 'Tech', source: 'Ars Technica', url: 'https://feeds.arstechnica.com/arstechnica/index' },
@@ -83,6 +90,7 @@ const cache = {
 };
 
 let refreshInFlight = null;
+const clubIaRateLimits = new Map();
 
 function toDate(value) {
   if (!value) {
@@ -124,6 +132,187 @@ function truncate(value, length) {
   }
 
   return `${value.slice(0, length - 1).trim()}…`;
+}
+
+function normalizeTextInput(value, maxLength) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized || normalized.length > maxLength) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeArticleUrl(value) {
+  const normalized = normalizeTextInput(value, CLUB_IA_MAX_URL_LENGTH);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getClientIp(request) {
+  const forwardedFor = request.headers['x-forwarded-for'];
+  const forwardedIp = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  return request.ip || forwardedIp?.split(',')[0]?.trim() || 'unknown';
+}
+
+function checkClubIaRateLimit(request) {
+  const now = Date.now();
+  const ip = getClientIp(request);
+  const current = clubIaRateLimits.get(ip);
+
+  if (!current || now - current.windowStartedAt >= CLUB_IA_RATE_LIMIT_WINDOW_MS) {
+    clubIaRateLimits.set(ip, {
+      count: 1,
+      windowStartedAt: now
+    });
+    return true;
+  }
+
+  if (current.count >= CLUB_IA_RATE_LIMIT_MAX) {
+    return false;
+  }
+
+  current.count += 1;
+  return true;
+}
+
+function cleanupClubIaRateLimits() {
+  const now = Date.now();
+
+  for (const [ip, entry] of clubIaRateLimits.entries()) {
+    if (now - entry.windowStartedAt >= CLUB_IA_RATE_LIMIT_WINDOW_MS * 2) {
+      clubIaRateLimits.delete(ip);
+    }
+  }
+}
+
+function buildClubIaPrompt({ title, summary, url }) {
+  return [
+    'Tu écris un message court pour partager une news dans un groupe "Club IA".',
+    'Contraintes strictes : français, style direct et pas corporate, accroche percutante, un insight ou une opinion, pas de hashtags, 1 emoji maximum et seulement au début.',
+    `Le message complet doit faire moins de ${CLUB_IA_MAX_MESSAGE_LENGTH} caracteres, URL incluse.`,
+    'Mets obligatoirement l URL seule sur une nouvelle ligne a la fin.',
+    'Ne mentionne pas ces consignes.',
+    '',
+    `Titre : ${title}`,
+    `Resume : ${summary || 'Non fourni'}`,
+    `URL : ${url}`
+  ].join('\n');
+}
+
+function normalizeGeneratedMessage(message, url) {
+  const text = String(message || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const withoutTrailingUrl = text.endsWith(url)
+    ? text.slice(0, -url.length).trim()
+    : text;
+
+  const sanitizedBody = withoutTrailingUrl
+    .replace(/#[^\s#]+/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const availableBodyLength = CLUB_IA_MAX_MESSAGE_LENGTH - url.length - 1;
+  const body = truncate(sanitizedBody, Math.max(24, availableBodyLength));
+
+  return `${body}\n${url}`.slice(0, CLUB_IA_MAX_MESSAGE_LENGTH).trim();
+}
+
+async function generateClubIaMessage({ title, summary, url }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    const error = new Error('OPENAI_API_KEY is not configured');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CLUB_IA_OPENAI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'Tu es un redacteur francophone pour une communaute tech/IA. Tu reponds uniquement avec le message final.'
+          },
+          {
+            role: 'user',
+            content: buildClubIaPrompt({ title, summary, url })
+          }
+        ],
+        temperature: 0.8,
+        max_tokens: 160
+      })
+    });
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const detail = payload?.error?.message || `OpenAI returned HTTP ${response.status}`;
+      const error = new Error(detail);
+      error.statusCode = 502;
+      error.openAiStatus = response.status;
+      throw error;
+    }
+
+    const content = payload?.choices?.[0]?.message?.content;
+    const message = normalizeGeneratedMessage(content, url);
+
+    if (!message) {
+      const error = new Error('OpenAI returned an empty message');
+      error.statusCode = 502;
+      throw error;
+    }
+
+    return message;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('OpenAI request timed out');
+      timeoutError.statusCode = 504;
+      throw timeoutError;
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractImageUrl(candidate) {
@@ -756,6 +945,50 @@ async function bootstrap() {
       hasData: updatedCache.hasData,
       totalItems: updatedCache.totalItems
     });
+  });
+
+  app.post('/api/generate-message', async (request, reply) => {
+    if (!checkClubIaRateLimit(request)) {
+      return reply.status(429).send({
+        error: 'Rate limit exceeded. Try again in a minute.'
+      });
+    }
+
+    cleanupClubIaRateLimits();
+
+    const body = request.body || {};
+    const title = normalizeTextInput(body.title, CLUB_IA_MAX_TITLE_LENGTH);
+    const summary = typeof body.summary === 'string'
+      ? body.summary.replace(/\s+/g, ' ').trim()
+      : null;
+    const url = normalizeArticleUrl(body.url);
+
+    if (!title || summary === null || summary.length > CLUB_IA_MAX_SUMMARY_LENGTH || !url) {
+      return reply.status(400).send({
+        error: 'Invalid payload. Expected title, summary and url strings within allowed lengths.'
+      });
+    }
+
+    try {
+      const message = await generateClubIaMessage({ title, summary, url });
+
+      return reply.send({
+        message,
+        charCount: message.length
+      });
+    } catch (error) {
+      const statusCode = error.statusCode || 500;
+      app.log.error({
+        error,
+        openAiStatus: error.openAiStatus || null
+      }, 'Club IA message generation failed');
+
+      return reply.status(statusCode).send({
+        error: statusCode === 503
+          ? 'OpenAI API key is not configured.'
+          : 'Could not generate the Club IA message right now.'
+      });
+    }
   });
 
   app.get('/health', async () => ({

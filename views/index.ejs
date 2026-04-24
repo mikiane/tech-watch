@@ -101,6 +101,15 @@
               <% } %>
               <div class="article-footer">
                 <span class="article-source"><span class="source-icon" aria-hidden="true">🌐</span><%= item.source %></span>
+                <button
+                  type="button"
+                  class="club-ia-button"
+                  data-title="<%= item.title %>"
+                  data-summary="<%= item.summary || '' %>"
+                  data-url="<%= item.link %>"
+                >
+                  Club IA
+                </button>
                 <time datetime="<%= item.publishedAtIso %>"><%= formatArticleDate(item.publishedAt) %> UTC</time>
               </div>
             </article>
@@ -157,12 +166,46 @@
         </div>
       </footer>
     </div>
+
+    <div class="club-ia-modal" id="clubIaModal" role="dialog" aria-modal="true" aria-labelledby="clubIaModalTitle" hidden>
+      <div class="club-ia-dialog">
+        <div class="club-ia-dialog-header">
+          <div>
+            <p class="club-ia-kicker">Club IA</p>
+            <h2 id="clubIaModalTitle">Message prêt à partager</h2>
+          </div>
+          <button type="button" class="club-ia-close" data-club-ia-close aria-label="Fermer">×</button>
+        </div>
+        <div class="club-ia-body">
+          <textarea id="clubIaMessage" class="club-ia-textarea" readonly></textarea>
+          <div class="club-ia-meta-row">
+            <span id="clubIaStatus" class="club-ia-status">Génération en cours…</span>
+            <span id="clubIaCounter" class="club-ia-counter">0 / 400</span>
+          </div>
+        </div>
+        <div class="club-ia-actions">
+          <button type="button" class="club-ia-secondary" id="clubIaRegenerate">Regénérer</button>
+          <button type="button" class="club-ia-primary" id="clubIaCopy">Copier</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       (() => {
         const filterChips = Array.from(document.querySelectorAll('.filter-chip'));
         const cards = document.querySelectorAll('.article-card');
         const refreshButton = document.getElementById('refreshButton');
+        const clubIaButtons = Array.from(document.querySelectorAll('.club-ia-button'));
+        const clubIaModal = document.getElementById('clubIaModal');
+        const clubIaMessage = document.getElementById('clubIaMessage');
+        const clubIaStatus = document.getElementById('clubIaStatus');
+        const clubIaCounter = document.getElementById('clubIaCounter');
+        const clubIaCopy = document.getElementById('clubIaCopy');
+        const clubIaRegenerate = document.getElementById('clubIaRegenerate');
+        const clubIaCloseButtons = Array.from(document.querySelectorAll('[data-club-ia-close]'));
         let activeFilter = 'all';
+        let activeClubIaArticle = null;
+        let lastFocusedElement = null;
 
         const applyFilter = () => {
           cards.forEach((card) => {
@@ -188,27 +231,158 @@
           applyFilter();
         }
 
-        if (!refreshButton) return;
+        if (refreshButton) {
+          refreshButton.addEventListener('click', async () => {
+            if (refreshButton.disabled) return;
 
-        refreshButton.addEventListener('click', async () => {
-          if (refreshButton.disabled) return;
+            refreshButton.disabled = true;
+            refreshButton.classList.add('is-loading');
 
-          refreshButton.disabled = true;
-          refreshButton.classList.add('is-loading');
+            try {
+              const response = await fetch('/api/refresh');
+
+              if (!response.ok) {
+                throw new Error('Refresh failed');
+              }
+
+              await response.json();
+              window.location.reload();
+            } catch (error) {
+              refreshButton.classList.remove('is-loading');
+              refreshButton.disabled = false;
+              window.alert('Refresh failed. Please try again.');
+            }
+          });
+        }
+
+        const updateClubIaCounter = () => {
+          if (!clubIaMessage || !clubIaCounter) return;
+          clubIaCounter.textContent = `${clubIaMessage.value.length} / 400`;
+          clubIaCounter.classList.toggle('is-over', clubIaMessage.value.length > 400);
+        };
+
+        const setClubIaLoading = (isLoading) => {
+          if (clubIaRegenerate) {
+            clubIaRegenerate.disabled = isLoading;
+          }
+
+          if (clubIaCopy) {
+            clubIaCopy.disabled = isLoading || !clubIaMessage?.value;
+          }
+
+          if (clubIaStatus) {
+            clubIaStatus.classList.remove('is-error');
+            clubIaStatus.textContent = isLoading ? 'Génération en cours…' : 'Prêt.';
+          }
+        };
+
+        const openClubIaModal = () => {
+          if (!clubIaModal) return;
+
+          lastFocusedElement = document.activeElement;
+          clubIaModal.hidden = false;
+          document.body.classList.add('club-ia-modal-open');
+          clubIaMessage?.focus();
+        };
+
+        const closeClubIaModal = () => {
+          if (!clubIaModal) return;
+
+          clubIaModal.hidden = true;
+          document.body.classList.remove('club-ia-modal-open');
+
+          if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
+            lastFocusedElement.focus();
+          }
+        };
+
+        const copyClubIaMessage = async () => {
+          if (!clubIaMessage?.value || !clubIaCopy) return;
 
           try {
-            const response = await fetch('/api/refresh');
-
-            if (!response.ok) {
-              throw new Error('Refresh failed');
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(clubIaMessage.value);
+            } else {
+              clubIaMessage.select();
+              document.execCommand('copy');
             }
 
-            await response.json();
-            window.location.reload();
+            const previousLabel = clubIaCopy.textContent;
+            clubIaCopy.textContent = 'Copié';
+            setTimeout(() => {
+              clubIaCopy.textContent = previousLabel;
+            }, 1400);
+          } catch {
+            if (clubIaStatus) {
+              clubIaStatus.classList.add('is-error');
+              clubIaStatus.textContent = 'Copie impossible.';
+            }
+          }
+        };
+
+        const generateClubIaMessage = async () => {
+          if (!activeClubIaArticle || !clubIaMessage) return;
+
+          clubIaMessage.value = '';
+          updateClubIaCounter();
+          setClubIaLoading(true);
+
+          try {
+            const response = await fetch('/api/generate-message', {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json'
+              },
+              body: JSON.stringify(activeClubIaArticle)
+            });
+            const payload = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+              throw new Error(payload.error || 'Génération impossible.');
+            }
+
+            clubIaMessage.value = payload.message || '';
+            updateClubIaCounter();
+            setClubIaLoading(false);
           } catch (error) {
-            refreshButton.classList.remove('is-loading');
-            refreshButton.disabled = false;
-            window.alert('Refresh failed. Please try again.');
+            setClubIaLoading(false);
+            if (clubIaStatus) {
+              clubIaStatus.classList.add('is-error');
+              clubIaStatus.textContent = error.message || 'Génération impossible.';
+            }
+          }
+        };
+
+        clubIaButtons.forEach((button) => {
+          button.addEventListener('click', () => {
+            activeClubIaArticle = {
+              title: button.dataset.title || '',
+              summary: button.dataset.summary || '',
+              url: button.dataset.url || ''
+            };
+            openClubIaModal();
+            generateClubIaMessage();
+          });
+        });
+
+        clubIaCloseButtons.forEach((button) => {
+          button.addEventListener('click', closeClubIaModal);
+        });
+
+        if (clubIaModal) {
+          clubIaModal.addEventListener('click', (event) => {
+            if (event.target === clubIaModal) {
+              closeClubIaModal();
+            }
+          });
+        }
+
+        clubIaCopy?.addEventListener('click', copyClubIaMessage);
+        clubIaRegenerate?.addEventListener('click', generateClubIaMessage);
+
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && clubIaModal && !clubIaModal.hidden) {
+            closeClubIaModal();
           }
         });
       })();
