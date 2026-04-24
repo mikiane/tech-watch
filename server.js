@@ -272,7 +272,6 @@ async function generateClubIaMessage({ title, summary, url }) {
             content: buildClubIaPrompt({ title, summary, url })
           }
         ],
-        temperature: 0.8,
         max_completion_tokens: 160
       })
     });
