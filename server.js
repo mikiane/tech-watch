@@ -261,7 +261,7 @@ async function generateClubIaMessage({ title, summary, url }) {
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-5.5',
         messages: [
           {
             role: 'system',
